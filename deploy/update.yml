@@ -1,0 +1,53 @@
+name: Update blunders
+
+on:
+  schedule:
+    - cron: "17 */2 * * *"     # every 2 hours (UTC), at :17 past to avoid the busy top of the hour
+  workflow_dispatch:            # lets you run it by hand from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-blunders
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TZ: Europe/Stockholm      # which day counts as "today"
+      MAX_MINUTES: "45"         # stop analysing in time to save; the next run continues
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Stockfish (latest official release)
+        run: |
+          curl -sSfL -o sf.tar https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64-avx2.tar
+          tar -xf sf.tar
+          SF="$(find stockfish -maxdepth 2 -type f -name 'stockfish-ubuntu-x86-64-avx2' | head -n1)"
+          chmod +x "$SF"
+          "$SF" <<< "quit" > sf-version.txt
+          head -n1 sf-version.txt
+          echo "STOCKFISH_PATH=$PWD/$SF" >> "$GITHUB_ENV"
+
+      - name: Analyse today's games
+        run: node server/analyze.mjs
+
+      - name: Save results
+        run: |
+          git config user.name "blunder-king-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git commit -m "Update blunders $(date +'%Y-%m-%d %H:%M')"
+          git pull --rebase --autostash
+          git push

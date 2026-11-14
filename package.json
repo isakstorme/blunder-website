@@ -1,0 +1,16 @@
+{
+  "name": "blunder-king",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Today's worst blunders by GMs and IMs in finished classical games broadcast on Lichess.",
+  "scripts": {
+    "analyze": "node server/analyze.mjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "chess.js": "0.10.3"
+  }
+}
