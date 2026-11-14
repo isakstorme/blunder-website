@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Blunder Watch — today's worst blunders in Lichess broadcasts</title>
+<title>Blunder King — today's worst blunders in Lichess broadcasts</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -55,6 +55,12 @@
   .card.top1 .rank{color:var(--bad)}
   .swing{font:700 26px "JetBrains Mono",monospace;color:var(--bad)}
   .swing small{font:500 12px Inter,sans-serif;color:var(--muted);margin-left:6px}
+  .mate-tag{font-size:12px;font-weight:700;color:#ff8a76;border:1px solid var(--bad);border-radius:4px;padding:1px 7px;align-self:center}
+  .sus-tag{font-size:12px;font-weight:700;color:#1d1916;background:var(--gold);border-radius:4px;padding:2px 8px;align-self:center}
+  .sus{font-size:13px;color:#e8c27a;background:rgba(217,164,65,.10);border:1px solid rgba(217,164,65,.35);border-radius:8px;padding:8px 12px}
+  .sus ul{margin:4px 0 0;padding-left:18px}
+  .card.suspect{border-style:dashed}
+  .card.suspect .board{opacity:.8}
   .live{font-size:11px;font-weight:700;letter-spacing:.08em;color:#fff;background:var(--bad);border-radius:4px;padding:1px 6px;align-self:center}
   .players{font-weight:600;font-size:16px}
   .players .t{color:var(--gold);font-weight:700;margin-right:3px}
@@ -97,13 +103,17 @@
   .empty{padding:40px 20px;text-align:center;color:var(--muted);background:var(--panel);border:1px dashed var(--line);border-radius:14px}
   .err{color:#ff8a76}
   footer{margin-top:40px;color:var(--dim);font-size:13px;max-width:760px}
+  footer .credit{color:var(--muted);font-size:14px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+  footer .credit b{color:var(--ink);font-weight:600}
+  .by-lichess{display:inline-block;margin-top:8px;font-size:13px;color:var(--dim)}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Blunder <em>Watch</em></h1>
-    <p class="sub">Today's worst blunders by GMs and IMs in classical games broadcast on Lichess, ranked by how much winning chance each move threw away. Updates automatically every 5 minutes.</p>
+    <h1>Blunder <em>King</em></h1>
+    <p class="sub">Today's worst blunders by GMs and IMs in finished classical games broadcast on Lichess, worst first. A move only counts if the player was no more than 1 pawn worse before it. Games are added as they finish; the page checks every 5 minutes.</p>
+    <span class="by-lichess">Game data from <a href="https://lichess.org/broadcast">Lichess.org</a> broadcasts</span>
   </header>
 
   <div class="status"><div class="bar"><i id="prog"></i></div><span id="status">Ready.</span></div>
@@ -120,7 +130,11 @@
   </div>
 
   <footer>
-    Games come live from the <a href="https://lichess.org/broadcast">Lichess broadcast</a> API. Every position is scored by Stockfish running in your browser; suspected blunders are re-checked with a longer search before they are listed. Evaluations are cached in this browser, so re-scans only analyse new moves. In-browser engine evals are approximate; open the game on Lichess for a full analysis.
+    <div class="credit">
+      <b>All games and tournament data come from <a href="https://lichess.org">Lichess.org</a></b>, the free, open-source chess server, via its <a href="https://lichess.org/api">public API</a>. The live coverage on <a href="https://lichess.org/broadcast">Lichess Broadcasts</a> is made possible by Lichess, its volunteers and the tournament organisers. Thank you! If you enjoy this site, consider <a href="https://lichess.org/patron">supporting Lichess</a>.
+      <br>Blunder King is an independent fan project and is not affiliated with or endorsed by Lichess.
+    </div>
+    <p>Positions are scored by <a href="https://stockfishchess.org">Stockfish</a> (via <a href="https://github.com/nmrugg/stockfish.js">stockfish.js</a>) running in your browser, and suspected blunders are re-checked with a longer search before they are listed. Only finished games are analysed. In-browser engine evaluations are approximate, so open the game on Lichess for a full analysis.</p>
   </footer>
 </div>
 
@@ -130,17 +144,20 @@ const API = "https://lichess.org";
 const MATE = 100000;       // encoded mate score (centipawns)
 const CAP = 1000;          // evals capped at ±10 pawns when measuring a drop
 const BLUNDER_WC = 0.30;   // drop in winning chances (scale −1..1) that makes a blunder (Lichess's own threshold)
+const MAX_WORSE_BEFORE = -100;  // before the blunder the player may be at most 1.00 pawn worse (level or winning positions are fine)
 const REFRESH_MS = 5 * 60 * 1000;
 // Winning chances on a −1..1 scale (same formula Lichess uses for its blunder marks)
 function wc(w){
   if (Math.abs(w) > MATE - 1000) return Math.sign(w);
   return 2 / (1 + Math.exp(-0.00368208 * clampCap(w))) - 1;
 }
-const SPEEDS = { fast:{q:80,d:700}, normal:{q:150,d:1500}, deep:{q:350,d:3500} };
-const SF_URLS = [
-  "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js",
-  "https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js",
-  "https://unpkg.com/stockfish.js@10.0.2/stockfish.js"
+const SPEEDS = { fast:{q:120,d:1500}, normal:{q:250,d:4000}, deep:{q:500,d:8000} };   // d = re-check of suspected blunders (only a few per day, so it can afford to be thorough)
+// Engine builds, best first. Stockfish 16 NNUE (WebAssembly) is ~8 plies deeper than the old asm.js Stockfish 10 at the same time.
+// SF16 finds its .wasm via the worker URL's #fragment, so we pass the CDN location there.
+const SF_SOURCES = [
+  { js: "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.js", wasm: "https://cdn.jsdelivr.net/npm/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm" },
+  { js: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.js", wasm: "https://unpkg.com/stockfish@16.0.0/src/stockfish-nnue-16-single.wasm" },
+  { js: "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js" }
 ];
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -153,8 +170,8 @@ const store = {
   set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
 const Cache = {
-  KEY: "bw-evals-v1", mem: new Map(), dirty: false,
-  load(){ const o = store.get(this.KEY, {}); for (const k in o) this.mem.set(k, o[k]); },
+  KEY: "bw-evals-v3", mem: new Map(), dirty: false,
+  load(){ try { localStorage.removeItem("bw-evals-v1"); localStorage.removeItem("bw-evals-v2"); } catch {} const o = store.get(this.KEY, {}); for (const k in o) this.mem.set(k, o[k]); },
   get(k){ return this.mem.get(k); },
   set(k, v){ this.mem.set(k, v); this.dirty = true; },
   save(){
@@ -166,14 +183,47 @@ const Cache = {
 const fenKey = f => f.split(" ").slice(0, 4).join(" ");
 
 /* ---------------- network ---------------- */
-async function getText(url, tries = 3){
-  for (let i = 0; i < tries; i++){
-    const r = await fetch(url);
-    if (r.status === 429){ setStatus("Lichess rate limit hit — waiting a minute…"); await sleep(61000); continue; }
-    if (!r.ok) throw new Error(`${r.status} on ${url}`);
-    return r.text();
+/* Lichess API rules (https://lichess.org/api):
+ *  1. Only make one request at a time.
+ *  2. After an HTTP 429, wait a full minute before resuming API usage.
+ * Every Lichess request goes through getText(). Requests are queued one after another within this tab, and a
+ * Web Lock serialises them across every open tab of the site, so even several tabs never overlap. A 429 sets a
+ * shared "paused until" time (in localStorage) that every tab honours before its next request. */
+const LOCK = "blunder-king-lichess";
+const PAUSE_KEY = "bw-lichess-paused-until";
+const PAUSE_MS = 60000 + 2000;      // a full minute, plus a small margin
+const GAP_MS = 500;                 // breathing room between consecutive requests
+let lichessChain = Promise.resolve();
+let lastRequestEnd = 0;
+
+function pausedUntil(){ return +store.get(PAUSE_KEY, 0) || 0; }
+async function lichessFetchOnce(url){
+  for (let attempt = 0; attempt < 3; attempt++){
+    let wait = pausedUntil() - Date.now();
+    if (wait > 0){
+      setStatus(`Lichess asked us to slow down — pausing all requests for ${Math.ceil(wait / 1000)} s, as its API rules require.`);
+      await sleep(wait);
+    }
+    wait = lastRequestEnd + GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    let r;
+    try { r = await fetch(url); } finally { lastRequestEnd = Date.now(); }
+    if (r.status === 429){
+      store.set(PAUSE_KEY, Date.now() + PAUSE_MS);
+      continue;                                       // loop: waits the full minute before trying again
+    }
+    if (!r.ok) throw new Error(`Lichess returned ${r.status} for ${url}`);
+    return await r.text();                            // body fully read before the next request may start
   }
-  throw new Error("Too many retries: " + url);
+  throw new Error("Lichess keeps rate-limiting us; will try again at the next refresh.");
+}
+function getText(url){
+  const run = () => (navigator.locks && navigator.locks.request)
+    ? navigator.locks.request(LOCK, () => lichessFetchOnce(url))
+    : lichessFetchOnce(url);
+  const p = lichessChain.then(run, run);
+  lichessChain = p.catch(() => {});
+  return p;
 }
 const ndjson = t => t.split("\n").filter(l => l.trim()).map(l => JSON.parse(l));
 
@@ -189,16 +239,17 @@ async function loadRounds(dayStart, dayEnd, isToday){
     for (const x of ((top.past && top.past.currentPageResults) || [])) add(x.tour, x.round);
   } catch (e) { console.warn(e); }
   if (!byId.size) throw new Error("Could not load broadcasts from Lichess.");
+  const now = Date.now();
   return [...byId.values()].filter(({ round }) => {
     const t = round.startsAt;
-    if (t && t >= dayStart && t < dayEnd) return true;
-    return isToday && round.ongoing && (!t || t < dayEnd);
-  });
+    if (round.ongoing) return isToday;
+    return !!t && t >= dayStart && t < dayEnd && t <= now;   // started today (skip rounds that haven't begun)
+  }).sort((a, b) => (b.tour.tier || 0) - (a.tour.tier || 0) || (!!b.round.ongoing - !!a.round.ongoing));
 }
 
 function tcAllowed(tour, mode){
   const info = tour.info || {};
-  const tc = String(info.fideTc || info.tc || "").toLowerCase();
+  const tc = String(info.fideTC || info.fideTc || info.tc || "").toLowerCase();
   const name = String(tour.name || "").toLowerCase();
   const isBlitz = /blitz|bullet|armageddon/.test(tc) || /blitz|bullet|armageddon/.test(name);
   const isRapid = /rapid/.test(tc) || /rapid/.test(name);
@@ -228,7 +279,12 @@ function parseGame(text){
     const ch = body[i];
     if (ch === "{"){                                   // comment
       const j = body.indexOf("}", i); const c = j < 0 ? body.slice(i) : body.slice(i + 1, j);
-      if (depth === 0 && plies.length){ const ev = parseEvalComment(c, chess.turn()); if (ev != null) plies[plies.length - 1].pgnEval = ev; }
+      if (depth === 0 && plies.length){
+        const last = plies[plies.length - 1];
+        const ev = parseEvalComment(c, chess.turn()); if (ev != null) last.pgnEval = ev;
+        const ck = c.match(/\[%clk\s+(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)\]/);
+        if (ck) last.clk = (+ck[1]) * 3600 + (+ck[2]) * 60 + parseFloat(ck[3]);
+      }
       i = j < 0 ? body.length : j + 1; continue;
     }
     if (ch === ";"){ const j = body.indexOf("\n", i); i = j < 0 ? body.length : j + 1; continue; }
@@ -245,23 +301,24 @@ function parseGame(text){
     const m = chess.move(tok, { sloppy: true });
     if (!m) break;
     plies.push({ san: m.san, uci: m.from + m.to + (m.promotion || ""), from: m.from, to: m.to, color: m.color,
-                 fenBefore, fenAfter: chess.fen(), pgnEval: null });
+                 fenBefore, fenAfter: chess.fen(), pgnEval: null, clk: null });
   }
   return { headers, plies };
 }
 
 /* ---------------- engine ---------------- */
-function makeWorker(url){
-  const blob = new Blob([`importScripts(${JSON.stringify(url)});`], { type: "application/javascript" });
-  return new Worker(URL.createObjectURL(blob));
+function makeWorker(src){
+  const blob = new Blob([`importScripts(${JSON.stringify(src.js)});`], { type: "application/javascript" });
+  const url = URL.createObjectURL(blob);
+  return new Worker(src.wasm ? url + "#" + encodeURIComponent(src.wasm) : url);
 }
 class Engine {
   static async create(){
-    const urls = Engine.url ? [Engine.url] : SF_URLS;
-    for (const url of urls){
+    const sources = Engine.src ? [Engine.src] : SF_SOURCES;
+    for (const src of sources){
       let e;
-      try { e = new Engine(makeWorker(url)); await e.handshake(30000); Engine.url = url; return e; }
-      catch (err){ console.warn("Stockfish load failed", url, err); try { e && e.w.terminate(); } catch {} }
+      try { e = new Engine(makeWorker(src)); await e.handshake(60000); Engine.src = src; return e; }
+      catch (err){ console.warn("Stockfish load failed", src.js, err); try { e && e.w.terminate(); } catch {} }
     }
     throw new Error("Could not load the Stockfish engine from any CDN.");
   }
@@ -352,12 +409,59 @@ function uciToSan(fen, uci){
 /* ---------------- state ---------------- */
 const S = {
   titles: new Set(["GM", "IM"]),
-  speed: "normal", day: null,
+  speed: "normal", day: null, pgnCache: new Map(), analysed: new Set(),
   results: new Map(), rounds: [], scanning: false, runId: 0,
   stats: { games: 0, positions: 0 }
 };
 
 /* ---------------- analysis ---------------- */
+function moveLabel(g, i){
+  const p = g.plies[i];
+  return Math.floor((i + (g.startBlack ? 1 : 0)) / 2 + (g.startMove || 1)) + (p.color === "w" ? ". " : "… ") + p.san;
+}
+
+/* Signs that a "blunder" is really a broadcast/board transmission error rather than a move that was played.
+ * Returns a list of plain-language reasons (empty = looks genuine). Blunders are only flagged, never hidden. */
+async function transmissionSuspicion(g, i, db, da){
+  const P = g.plies, p = P[i], reasons = [];
+  const sign = p.color === "w" ? 1 : -1;
+  const mover = p.color === "w" ? g.white : g.black, opp = p.color === "w" ? g.black : g.white;
+  const wcBefore = sign * wc(db.w), wcAfter = sign * wc(da.w), lost = wcBefore - wcAfter;
+  const moverCp = sign * da.w;
+
+  // 1. The gift wasn't taken: after the opponent's reply the evaluation snaps straight back.
+  if (i + 1 < P.length){
+    const dr = await evalPos(P[i + 1].fenAfter, true);
+    const wcReply = sign * wc(dr.w);
+    if (wcReply - wcAfter >= 0.75 * lost)
+      reasons.push(`${opp} didn't take advantage: after ${moveLabel(g, i + 1)} the evaluation was back to ${fmtEval(dr.w)}`);
+  }
+
+  // 2. The result doesn't fit the position the "blunder" left behind.
+  const res = (g.result || "").trim();
+  const moverWon = (p.color === "w" && res === "1-0") || (p.color === "b" && res === "0-1");
+  const drawn = res === "1/2-1/2" || res === "½-½";
+  const pliesLeft = P.length - 1 - i;
+  if (moverWon && moverCp <= -300) reasons.push(`${mover} went on to win the game anyway`);
+  else if (drawn && moverCp <= -500 && pliesLeft <= 6) reasons.push(`The game was drawn right after, in a position that was lost for ${mover}`);
+
+  // 3. Clock times that don't add up (only when the game has clock data at all).
+  const withClock = P.filter(x => x.clk != null).length;
+  if (withClock >= P.length * 0.8){
+    const inc = +(((g.timeControl || "").match(/\+(\d+)/) || [])[1] || 0);
+    const prevOwn = i >= 2 ? P[i - 2].clk : null;
+    if (p.clk == null) reasons.push("No clock time was recorded for this move");
+    else if (prevOwn != null && p.clk > prevOwn + inc + 5 && p.clk - prevOwn < 600)
+      reasons.push("The player's clock went up after this move, which shouldn't happen");
+    else if (prevOwn != null && inc > 0 && p.clk === prevOwn)
+      reasons.push("The player's clock didn't change at all for this move (not even the increment). This often means a move was sent after the game was over");
+    if (i + 1 < P.length && P[i + 1].clk != null && i >= 1 && inc > 0 && P[i + 1].clk === P[i - 1].clk)
+      reasons.push("The opponent's clock didn't change at all for the reply, which looks like moves sent after the game was over");
+    if (i + 1 < P.length && P[i + 1].clk == null) reasons.push("No clock time was recorded for the reply");
+  }
+  return reasons;
+}
+
 async function analyseGame(g, runId, onPos){
   const P = g.plies; if (!P.length) return;
   const fens = P.map(p => p.fenBefore).concat([P[P.length - 1].fenAfter]);
@@ -366,11 +470,17 @@ async function analyseGame(g, runId, onPos){
     return evalPos(f, false).then(r => { onPos(); return r; });
   }));
   if (runId !== S.runId) return;
+  // Re-derive this game's blunders from scratch: live feeds sometimes send a wrong move (DGT board glitch)
+  // that Lichess corrects later, so results from an earlier version of the game must not linger.
+  for (const id of [...S.results.keys()]) if (id.startsWith(g.key + ":")) S.results.delete(id);
   const cands = [];
   P.forEach((p, i) => {
+    // The newest move of a live game may still be a board glitch; it gets checked once the next move arrives.
+    if (g.live && i === P.length - 1) return;
     const title = p.color === "w" ? g.wTitle : g.bTitle;
     if (!S.titles.has(title)) return;
     const sign = p.color === "w" ? 1 : -1, b = quick[i].w, a = quick[i + 1].w;
+    if (sign * b < MAX_WORSE_BEFORE - 60) return;   // already clearly worse: not counted (small margin; the re-check decides)
     if (sign * (wc(b) - wc(a)) >= BLUNDER_WC * 0.6) cands.push(i);
   });
   for (const i of cands){
@@ -381,11 +491,12 @@ async function analyseGame(g, runId, onPos){
     const drop = sign * (clampCap(db.w) - clampCap(da.w));
     const wcDrop = sign * (wc(db.w) - wc(da.w));
     const id = g.key + ":" + i;
-    if (wcDrop >= BLUNDER_WC && db.best !== p.uci){
+    if (wcDrop >= BLUNDER_WC && sign * db.w >= MAX_WORSE_BEFORE && db.best !== p.uci){
+      const suspect = await transmissionSuspicion(g, i, db, da);
       S.results.set(id, {
         id, g, i, san: p.san, from: p.from, to: p.to, color: p.color,
-        label: Math.floor((i + (g.startBlack ? 1 : 0)) / 2 + (g.startMove || 1)) + (p.color === "w" ? ". " : "… ") + p.san,
-        before: db.w, after: da.w, drop, wcDrop,
+        label: moveLabel(g, i),
+        before: db.w, after: da.w, drop, wcDrop, suspect,
         bestUci: db.best, bestSan: uciToSan(p.fenBefore, db.best), fenBefore: p.fenBefore
       });
     } else S.results.delete(id);
@@ -398,7 +509,7 @@ async function scan(){
   if (S.scanning) return;
   S.scanning = true; const runId = ++S.runId;
   const now = new Date(), dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime(), dayEnd = dayStart + 86400000;
-  if (S.day !== dayStart){ S.results.clear(); S.day = dayStart; }   // new day: start fresh; otherwise keep showing results while refreshing
+  if (S.day !== dayStart){ S.results.clear(); S.pgnCache.clear(); S.analysed.clear(); S.day = dayStart; }   // new day: start fresh; otherwise keep showing results while refreshing
   S.stats = { games: 0, positions: 0 }; render();
   try {
     if (typeof Chess === "undefined") throw new Error("chess.js did not load — check your internet connection.");
@@ -411,50 +522,65 @@ async function scan(){
     renderEvents();
     if (!rounds.length){ setStatus(`No classical or rapid broadcast rounds on Lichess yet today. Checking again every 5 minutes.`); return; }
 
+    setStatus("Loading Stockfish…");
+    await pool.init(Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)));
+
+    // Download one round, analyse its games, then move on: top-tier events first, results appear as we go,
+    // and the analysis time naturally spaces out our Lichess requests (avoids rate limiting).
     const games = [];
+    let done = 0;
     for (let k = 0; k < S.rounds.length; k++){
       if (runId !== S.runId) return;
       const R = S.rounds[k];
-      setStatus(`Downloading games: ${R.tour.name} — ${R.round.name} (${k + 1}/${S.rounds.length})`);
+      setStatus(`Downloading ${R.tour.name} — ${R.round.name} (round ${k + 1} of ${S.rounds.length})`);
+      setProg(k / S.rounds.length);
+      const roundGames = [];
       try {
-        const txt = await getText(`${API}/api/broadcast/round/${R.round.id}.pgn`);
-        const parts = splitPgn(txt); let titled = 0;
+        // Finished rounds don't change: reuse their PGN instead of asking Lichess again.
+        let txt = S.pgnCache.get(R.round.id);
+        if (txt == null){
+          txt = await getText(`${API}/api/broadcast/round/${R.round.id}.pgn`);
+          if (R.round.finished) S.pgnCache.set(R.round.id, txt);
+          await sleep(600);
+        }
+        const parts = splitPgn(txt); let titled = 0, inProgress = 0;
         parts.forEach((t, n) => {
           let pg; try { pg = parseGame(t); } catch { return; }
           const h = pg.headers;
           const wT = (h.WhiteTitle || "").toUpperCase(), bT = (h.BlackTitle || "").toUpperCase();
           if (!(S.titles.has(wT) || S.titles.has(bT)) || pg.plies.length < 2) return;
+          // Only finished games: live moves can still be board glitches that Lichess corrects later.
+          if (!/^(1-0|0-1|1\/2-1\/2|½-½)$/.test((h.Result || "").trim())){ inProgress++; return; }
           titled++;
           const fenParts = (h.FEN || "").split(" ");
-          games.push({
+          roundGames.push({
             key: R.round.id + "/" + (h.GameURL || h.ChapterURL || n),
             white: h.White || "?", black: h.Black || "?", wTitle: wT, bTitle: bT,
-            wElo: h.WhiteElo, bElo: h.BlackElo, result: h.Result,
+            wElo: h.WhiteElo, bElo: h.BlackElo, result: h.Result, timeControl: h.TimeControl,
             url: h.GameURL || h.ChapterURL || R.round.url || `${API}/broadcast`,
             tour: R.tour.name, round: R.round.name, live: !!R.round.ongoing && (!h.Result || h.Result === "*"),
             startBlack: fenParts[1] === "b", startMove: h.FEN ? +fenParts[5] || 1 : 1,
             plies: pg.plies
           });
         });
-        R.nGames = parts.length; R.nTitled = titled;
+        R.nGames = parts.length; R.nTitled = titled; R.nLive = inProgress;
       } catch (e){ console.warn(e); R.error = true; }
       renderEvents();
-      await sleep(400);
+      for (let j = 0; j < roundGames.length; j++){
+        if (runId !== S.runId) return;
+        const g = roundGames[j];
+        // A finished game never changes, so analyse it once per day and keep its result.
+        const sig = g.key + "#" + g.plies.length;
+        if (!S.analysed.has(sig)){
+          setStatus(`Analysing ${R.tour.name} — ${g.white} vs ${g.black} (round ${k + 1} of ${S.rounds.length})`);
+          await analyseGame(g, runId, () => { done++; S.stats.positions = done; });
+          if (runId !== S.runId) return;
+          S.analysed.add(sig);
+        }
+        games.push(g); S.stats.games = games.length; render();
+      }
     }
-    if (!games.length){ setStatus("Rounds found, but no games between players with the selected titles."); return; }
-
-    setStatus("Loading Stockfish…");
-    const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
-    await pool.init(n);
-    const total = games.reduce((s, g) => s + g.plies.length + 1, 0);
-    let done = 0;
-    for (let k = 0; k < games.length; k++){
-      if (runId !== S.runId) return;
-      const g = games[k];
-      setStatus(`Analysing ${k + 1}/${games.length}: ${g.white} – ${g.black}`);
-      await analyseGame(g, runId, () => { done++; S.stats.positions = done; if (done % 10 === 0) setProg(done / total); });
-      S.stats.games = k + 1; render();
-    }
+    if (!games.length){ setStatus("No finished games with GMs or IMs yet today. Checking again every 5 minutes."); return; }
     setProg(1);
     const keys = new Set(games.map(g => g.key));
     for (const [id, r] of S.results) if (!keys.has(r.g.key)) S.results.delete(id);
@@ -502,17 +628,23 @@ function boardHTML(fen, played, best, flip){
 function evDot(w){ const p = clampCap(w) / CAP; return 50 + 50 * Math.tanh(p * 2.2); }
 
 function render(){
-  const list = [...S.results.values()]
-    .filter(r => r.wcDrop >= BLUNDER_WC && S.titles.has(r.color === "w" ? r.g.wTitle : r.g.bTitle))
-    .sort((a, b) => b.wcDrop - a.wcDrop || b.drop - a.drop);
+  // At most one blunder per game: keep only that game's worst.
+  const perGame = new Map();
+  for (const r of S.results.values()){
+    if (r.wcDrop < BLUNDER_WC || !S.titles.has(r.color === "w" ? r.g.wTitle : r.g.bTitle)) continue;
+    const cur = perGame.get(r.g.key);
+    if (!cur || r.wcDrop > cur.wcDrop || (r.wcDrop === cur.wcDrop && r.drop > cur.drop)) perGame.set(r.g.key, r);
+  }
+  const list = [...perGame.values()].sort((a, b) => b.wcDrop - a.wcDrop || b.drop - a.drop);
   const worst = list[0];
   $("#summary").innerHTML = S.stats.games || list.length ? `
     <div>Blunders<b>${list.length}</b></div>
+    ${list.some(r => r.suspect && r.suspect.length) ? `<div>Possible errors<b style="color:var(--gold)">${list.filter(r => r.suspect && r.suspect.length).length}</b></div>` : ""}
     <div>Games analysed<b>${S.stats.games}</b></div>
     <div>Positions<b>${S.stats.positions.toLocaleString()}</b></div>
-    ${worst ? `<div>Worst<b style="color:var(--bad)">−${Math.round(worst.wcDrop * 50)}%</b></div>` : ""}` : "";
+` : "";
   if (!list.length){
-    $("#results").innerHTML = `<div class="empty">${S.stats.games && !S.scanning ? "No blunders by GMs or IMs so far today." : "Scanning today's games… blunders appear here as they are found."}</div>`;
+    $("#results").innerHTML = `<div class="empty">${S.stats.games && !S.scanning ? "No blunders by GMs or IMs in today's finished games yet. Games are added as they finish." : "Scanning today's finished games… blunders appear here as they are found."}</div>`;
     return;
   }
   $("#results").innerHTML = list.map((r, k) => {
@@ -522,10 +654,11 @@ function render(){
     const sideWord = white ? "White" : "Black";
     const mv = x => (white ? x : -x);
     const res = g.result && g.result !== "*" ? ` · ${esc(g.result)}` : "";
-    return `<article class="card${k === 0 ? " top1" : ""}">
+    return `<article class="card${k === 0 ? " top1" : ""}${r.suspect && r.suspect.length ? " suspect" : ""}">
       ${boardHTML(r.fenBefore, { from: r.from, to: r.to }, r.bestUci, !white)}
       <div class="info">
-        <div class="rowtop"><span class="rank">#${k + 1}</span><span class="swing">−${Math.round(r.wcDrop * 50)}%<small>winning chances for ${sideWord}${Math.abs(r.after) > MATE - 1000 ? " · allows mate" : ""}</small></span>${g.live ? `<span class="live">LIVE</span>` : ""}</div>
+        <div class="rowtop"><span class="rank">#${k + 1}</span>${Math.abs(r.after) > MATE - 1000 ? `<span class="mate-tag">allows mate</span>` : ""}${g.live ? `<span class="live">LIVE</span>` : ""}${r.suspect && r.suspect.length ? `<span class="sus-tag">⚠ Possible transmission error</span>` : ""}</div>
+        ${r.suspect && r.suspect.length ? `<div class="sus">This may not be a move that was really played. The board's signal might have sent a wrong move:<ul>${r.suspect.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
         <div class="players">${pl(g.wTitle, g.white, g.wElo, white)}<span class="vs">vs</span>${pl(g.bTitle, g.black, g.bElo, !white)}</div>
         <div class="event">${esc(g.tour)} · ${esc(g.round)}${res}</div>
         <div class="line"><span class="mv bad">${esc(r.label)}??</span> &nbsp;played by ${esc(mover)}</div>
@@ -542,7 +675,7 @@ function renderEvents(){
   if (!S.rounds.length){ $("#events").innerHTML = `<div class="ev-item"><div>No rounds for this date.</div></div>`; return; }
   $("#events").innerHTML = S.rounds.map(R => {
     const st = R.round.ongoing ? "live" : R.round.finished ? "finished" : "scheduled";
-    const cnt = R.error ? "could not load" : R.nGames == null ? "…" : `${R.nTitled} of ${R.nGames} games with selected titles`;
+    const cnt = R.error ? "could not load" : R.nGames == null ? "…" : `${R.nTitled} finished GM/IM game${R.nTitled === 1 ? "" : "s"}${R.nLive ? ` · ${R.nLive} still playing` : ""}`;
     return `<div class="ev-item"><a href="${esc(R.round.url || API + "/broadcast")}" target="_blank" rel="noopener">${esc(R.tour.name)}</a>
       <div>${esc(R.round.name)} · ${st}</div><div>${cnt}</div></div>`;
   }).join("");
